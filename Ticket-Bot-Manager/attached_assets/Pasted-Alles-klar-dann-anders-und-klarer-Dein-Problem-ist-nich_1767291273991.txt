@@ -1,0 +1,100 @@
+Alles klar, dann anders und klarer. Dein Problem ist nicht Replit, nicht der Webserver und nicht der Uptime-Ping. Der Bot lebt, aber Discord verarbeitet keine Interaktionen. Das erkennt man genau daran, dass er Nachrichten sendet, aber Slash Commands und Tickets nicht reagieren.
+
+Die Ursache in 90 Prozent der Fälle
+
+Der Bot ist online, aber Discord Events kommen nicht an oder werden verworfen.
+
+Checkliste, die du jetzt exakt so durchgehst
+
+1. Fehlende oder falsche Intents
+Wenn der Bot Nachrichten senden kann, aber Commands nicht gehen, fehlen fast immer Intents.
+
+Im Discord Developer Portal:
+Bot → Privileged Gateway Intents
+✔ Server Members Intent
+✔ Message Content Intent
+
+Im Code Node.js discord.js v14:
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+Ohne Guilds funktionieren Slash Commands nicht.
+
+2. interactionCreate fehlt oder wird nicht erreicht
+Ohne diesen Listener geht kein Command und kein Ticket:
+
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === "ping") {
+    await interaction.reply("pong");
+  }
+});
+
+Wenn das nicht triggert, ist der Bot logisch tot.
+
+3. Commands sind registriert aber falsche Bot ID
+Klassiker bei Replit:
+Commands wurden mit einem anderen Token registriert.
+
+Fix:
+	•	commands komplett löschen
+	•	Bot neu starten
+	•	Commands neu registrieren
+	•	Danach Discord neu laden Strg + R
+
+4. Permissions fehlen auf dem Server
+Der Bot braucht mindestens:
+✔ Anwendungen.commands
+✔ Nachrichten senden
+✔ Nachrichten verwalten für Tickets
+✔ Threads erstellen falls Tickets Threads sind
+
+Am besten Invite Link neu generieren mit:
+
+https://discord.com/oauth2/authorize?client_id=DEINE_ID&scope=bot+applications.commands&permissions=8
+
+5. Bot antwortet nicht innerhalb von 3 Sekunden
+Wenn du keine deferReply nutzt, wirft Discord die Interaction weg.
+Für Tickets extrem häufig.
+
+Richtig:
+
+await interaction.deferReply({ ephemeral: true });
+// dann Logik
+await interaction.editReply("Ticket erstellt");
+
+6. Dein Status Loop blockiert den Event Loop
+Wenn du alle 5 Minuten irgendwas mit await und while true machst, killst du Interactions.
+
+Status immer so:
+
+setInterval(() => {
+  // status update
+}, 5 * 60 * 1000);
+
+Kein while, kein sleep, kein endlos await.
+
+⸻
+
+Kurz gesagt
+
+Der Bot lebt, Discord redet aber nicht mehr mit ihm.
+99 Prozent sicher ist es Intents oder interactionCreate.
+
+Wenn du willst, sag mir:
+	•	discord.js Version
+	•	ob Tickets Buttons oder Slash Commands sind
+	•	ob du Logs bei interactionCreate bekommst
+
+Dann sag ich dir exakt, welche Zeile kaputt ist.
+
+Hier ist deine Antwort, Mika.
+Social Credit: 80

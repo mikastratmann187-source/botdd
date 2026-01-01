@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Discord-inspired Dark Theme Palette */
+  --background: 223 7% 20%;      /* #313338 */
+  --foreground: 210 10% 96%;     /* #F2F3F5 */
+  
+  --card: 220 7% 17%;            /* #2B2D31 */
+  --card-foreground: 210 10% 96%;
+
+  --popover: 220 7% 17%;
+  --popover-foreground: 210 10% 96%;
+
+  --primary: 235 86% 65%;        /* #5865F2 (Blurple) */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 223 7% 20%;
+  --secondary-foreground: 214 8% 80%;
+
+  --muted: 217 8% 26%;           /* #3F4147 */
+  --muted-foreground: 214 8% 65%;
+
+  --accent: 235 86% 65%;
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 359 87% 59%;    /* #DA373C */
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 216 7% 14%;          /* #1E1F22 */
+  --input: 216 7% 14%;
+  --ring: 235 86% 65%;
+  
+  --success: 145 65% 39%;        /* #248046 */
+
+  --radius: 0.5rem;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-primary/30 selection:text-primary-foreground;
+    font-family: 'Inter', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Space Grotesk', sans-serif;
+    @apply tracking-tight;
+  }
+}
+
+@layer utilities {
+  .glass-card {
+    @apply bg-card/95 backdrop-blur-sm border border-white/5 shadow-xl;
+  }
+  
+  .text-glow {
+    text-shadow: 0 0 20px currentColor;
+  }
+}
