@@ -1,19 +1,10 @@
+// ----------------------
+// ENVIRONMENT & IMPORTS
+// ----------------------
 import dotenv from 'dotenv';
 dotenv.config(); // <- ganz oben
 
 import express from 'express';
-
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-app.get('/', (req, res) => {
-  res.send('Bot is alive!');
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Express server running on port ${PORT}`);
-});
-
 import { 
   Client, 
   GatewayIntentBits, 
@@ -24,14 +15,22 @@ import {
   ModalBuilder, 
   TextInputBuilder, 
   TextInputStyle, 
-  TextChannel, 
-  ChatInputCommandInteraction, 
-  ButtonInteraction, 
-  ModalSubmitInteraction 
+  TextChannel,
+  ChatInputCommandInteraction,
+  ButtonInteraction,
+  ModalSubmitInteraction,
+  ChannelType
 } from 'discord.js';
-import dotenv from 'dotenv';
 
-dotenv.config(); // Lädt lokale .env, Render liest Environment Variables automatisch
+// ----------------------
+// EXPRESS SERVER
+// ----------------------
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get('/', (_, res) => res.send('Bot is alive!'));
+
+app.listen(PORT, () => console.log(`✅ Express server running on port ${PORT}`));
 
 // ----------------------
 // ENVIRONMENT VARIABLES
@@ -48,14 +47,14 @@ if (!TOKEN) {
 }
 
 // ----------------------
-// CLIENT INIT
+// DISCORD CLIENT
 // ----------------------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers,
-  ],
+    GatewayIntentBits.GuildMembers
+  ]
 });
 
 // ----------------------
@@ -76,19 +75,18 @@ async function safeInteractionCall(interaction: any, fn: 'reply' | 'update' | 'f
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user?.tag}`);
 
-  // Set presence
   try {
     await client.user?.setPresence({
       activities: [{ name: 'Managing tickets' }],
-      status: 'online',
+      status: 'online'
     });
   } catch (err) {
     console.warn('Failed to set presence:', err);
   }
 
-  // Register slash commands
+  // Register slash command /open-ticket
   const commands = [
-    { name: 'open-ticket', description: 'Open a new support ticket' },
+    { name: 'open-ticket', description: 'Open a new support ticket' }
   ];
 
   try {
@@ -99,7 +97,7 @@ client.once('ready', async () => {
         console.log(`✅ Registered commands to guild ${GUILD_ID}`);
       } else {
         await client.application?.commands.set(commands, GUILD_ID);
-        console.log(`✅ Registered commands to guild ${GUILD_ID} (via API)`);
+        console.log(`✅ Registered commands to guild ${GUILD_ID} via API`);
       }
     } else {
       await client.application?.commands.set(commands);
@@ -115,103 +113,90 @@ client.once('ready', async () => {
 // ----------------------
 client.on('interactionCreate', async (interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction) => {
   try {
-    // ----------------------
-    // SLASH COMMAND: /open-ticket
-    // ----------------------
-    if ('isChatInputCommand' in interaction && interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'open-ticket') {
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
-
-        const guild = interaction.guild;
-        if (!guild) {
-          await safeInteractionCall(interaction, 'reply', { content: 'This command can only be used in a server.', ephemeral: true });
-          return;
-        }
-
-        const name = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, '')}`.slice(0, 90);
-
-        const overwrites = [
-          { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-          { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
-          { id: client.user!.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels] },
-        ];
-
-        const channelOptions: any = { type: 0, permissionOverwrites: overwrites };
-        if (TICKET_CATEGORY_ID) channelOptions.parent = TICKET_CATEGORY_ID;
-
-        const channel = await guild.channels.create({ name, ...channelOptions });
-
-        const closeButton = new ButtonBuilder().setCustomId('ticket_close').setLabel('Close Ticket').setStyle(ButtonStyle.Danger);
-        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton);
-
-        await channel.send({ content: `Hello <@${interaction.user.id}>, a staff member will be with you shortly. Use the button below to close this ticket when you are done.`, components: [row] });
-
-        await safeInteractionCall(interaction, 'editReply', { content: `Ticket created: <#${channel.id}>`, ephemeral: true }).catch(() => {});
+    // ---------- Slash Command ----------
+    if (interaction instanceof ChatInputCommandInteraction && interaction.commandName === 'open-ticket') {
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+      const guild = interaction.guild;
+      if (!guild) {
+        await safeInteractionCall(interaction, 'reply', { content: 'This command can only be used in a server.', ephemeral: true });
         return;
       }
+
+      const name = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, '')}`.slice(0, 90);
+
+      const overwrites = [
+        { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
+        { id: client.user!.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels] },
+      ];
+
+      const channel = await guild.channels.create({
+        name,
+        type: ChannelType.GuildText,
+        permissionOverwrites: overwrites,
+        parent: TICKET_CATEGORY_ID || undefined
+      });
+
+      const closeButton = new ButtonBuilder()
+        .setCustomId('ticket_close')
+        .setLabel('Close Ticket')
+        .setStyle(ButtonStyle.Danger);
+
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton);
+
+      await channel.send({ content: `Hello <@${interaction.user.id}>, a staff member will be with you shortly. Use the button below to close this ticket.`, components: [row] });
+      await safeInteractionCall(interaction, 'editReply', { content: `Ticket created: <#${channel.id}>`, ephemeral: true });
+      return;
     }
 
-    // ----------------------
-    // BUTTON INTERACTIONS
-    // ----------------------
-    if ('isButton' in interaction && interaction.isButton()) {
-      if (interaction.customId === 'ticket_close') {
-        const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('Close Ticket');
+    // ---------- Button Interaction ----------
+    if (interaction instanceof ButtonInteraction && interaction.customId === 'ticket_close') {
+      const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('Close Ticket');
+      const reasonInput = new TextInputBuilder()
+        .setCustomId('reason')
+        .setLabel('Reason for closing (optional)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setPlaceholder('Describe why the ticket is being closed');
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput) as any);
 
-        const reasonInput = new TextInputBuilder()
-          .setCustomId('reason')
-          .setLabel('Reason for closing (optional)')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(false)
-          .setPlaceholder('Describe why the ticket is being closed');
+      await interaction.showModal(modal).catch(async err => {
+        if (err && (err.code === 10062 || String(err.message).includes('Unknown interaction'))) return;
+        console.error('showModal failed:', err);
+        await safeInteractionCall(interaction, 'reply', { content: 'Failed to open modal to close ticket.', ephemeral: true });
+      });
+      return;
+    }
 
-        const firstRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
-        modal.addComponents(firstRow as any);
+    // ---------- Modal Submit ----------
+    if (interaction instanceof ModalSubmitInteraction && interaction.customId === 'ticket_close_modal') {
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+      const reason = interaction.fields.getTextInputValue('reason') || 'No reason provided';
+      const channel = interaction.channel as TextChannel | undefined;
 
-        await interaction.showModal(modal).catch(async (err: any) => {
-          if (err && (err.code === 10062 || String(err.message).includes('Unknown interaction'))) return;
-          console.error('showModal failed:', err);
-          await safeInteractionCall(interaction, 'reply', { content: 'Failed to open modal to close ticket.', ephemeral: true });
-        });
+      if (!channel || !channel.guild) {
+        await safeInteractionCall(interaction, 'editReply', { content: 'Could not determine ticket channel.', ephemeral: true });
         return;
       }
-    }
 
-    // ----------------------
-    // MODAL SUBMIT
-    // ----------------------
-    if ('isModalSubmit' in interaction && interaction.isModalSubmit()) {
-      if (interaction.customId === 'ticket_close_modal') {
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
-
-        const reason = interaction.fields.getTextInputValue('reason') || 'No reason provided';
-        const channel = interaction.channel as TextChannel | undefined;
-        if (!channel || !channel.guild) {
-          await safeInteractionCall(interaction, 'editReply', { content: 'Could not determine ticket channel.', ephemeral: true });
-          return;
+      try {
+        if (CLOSED_CATEGORY_ID) {
+          await channel.setParent(CLOSED_CATEGORY_ID).catch(err => console.warn('Failed to move channel to closed category:', err));
         }
 
-        try {
-          // Move to closed category
-          if (CLOSED_CATEGORY_ID) {
-            await channel.setParent(CLOSED_CATEGORY_ID).catch(err => console.warn('Failed to move channel to closed category:', err));
-          }
-
-          await channel.setName(`closed-${channel.name}`).catch(err => console.warn('Failed to rename channel:', err));
-          await channel.send(`This ticket has been closed by <@${interaction.user.id}>. Reason: ${reason}`);
-          await safeInteractionCall(interaction, 'editReply', { content: 'Ticket closed successfully.', ephemeral: true });
-        } catch (err) {
-          console.error('Error closing ticket:', err);
-          await safeInteractionCall(interaction, 'editReply', { content: 'An error occurred while closing the ticket.', ephemeral: true });
-        }
-        return;
+        await channel.setName(`closed-${channel.name}`).catch(err => console.warn('Failed to rename channel:', err));
+        await channel.send(`This ticket has been closed by <@${interaction.user.id}>. Reason: ${reason}`);
+        await safeInteractionCall(interaction, 'editReply', { content: 'Ticket closed successfully.', ephemeral: true });
+      } catch (err) {
+        console.error('Error closing ticket:', err);
+        await safeInteractionCall(interaction, 'editReply', { content: 'An error occurred while closing the ticket.', ephemeral: true });
       }
+      return;
     }
+
   } catch (err) {
     console.error('Unhandled interaction error:', err);
-    try {
-      await safeInteractionCall(interaction, 'reply', { content: 'An unexpected error occurred.', ephemeral: true });
-    } catch {}
+    try { await safeInteractionCall(interaction, 'reply', { content: 'An unexpected error occurred.', ephemeral: true }); } catch {}
   }
 });
 
