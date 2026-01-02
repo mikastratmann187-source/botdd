@@ -1,21 +1,21 @@
 import dotenv from 'dotenv';
-dotenv.config(); // Lädt lokale .env, Render liest seine Environment Variables automatisch
+dotenv.config(); // Lädt Env Variables
 
 import express from 'express';
 import { 
-  Client, 
-  GatewayIntentBits, 
-  PermissionsBitField, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle, 
-  ModalBuilder, 
-  TextInputBuilder, 
-  TextInputStyle, 
-  TextChannel, 
-  ChatInputCommandInteraction, 
-  ButtonInteraction, 
-  ModalSubmitInteraction 
+  Client,
+  GatewayIntentBits,
+  PermissionsBitField,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  TextChannel,
+  ChatInputCommandInteraction,
+  ButtonInteraction,
+  ModalSubmitInteraction
 } from 'discord.js';
 
 // ----------------------
@@ -23,22 +23,20 @@ import {
 // ----------------------
 const app = express();
 const PORT = process.env.PORT || 10000;
-
 app.get('/', (req, res) => res.send('Bot is alive!'));
-
 app.listen(PORT, () => console.log(`✅ Express server running on port ${PORT}`));
 
 // ----------------------
-// ENVIRONMENT VARIABLES
+// ENV VARIABLES
 // ----------------------
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID; 
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; 
+const GUILD_ID = process.env.GUILD_ID;
+const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
 const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
 
 // ----------------------
-// OPTIONAL DEBUG
+// DEBUG ENV
 // ----------------------
 console.log('DEBUG: Environment Variables');
 console.log('DISCORD_TOKEN:', TOKEN ? '✅ Token gesetzt' : '❌ Kein Token');
@@ -48,7 +46,7 @@ console.log('TICKET_CATEGORY_ID:', TICKET_CATEGORY_ID ? TICKET_CATEGORY_ID : '�
 console.log('CLOSED_CATEGORY_ID:', CLOSED_CATEGORY_ID ? CLOSED_CATEGORY_ID : '⚠️ Optional');
 
 if (!TOKEN) {
-  console.error('❌ DISCORD_TOKEN ist nicht gesetzt! Bitte in Render Environment Variables eintragen.');
+  console.error('❌ DISCORD_TOKEN ist nicht gesetzt! Bitte in Render eintragen.');
   process.exit(1);
 }
 
@@ -56,17 +54,13 @@ if (!TOKEN) {
 // CLIENT INIT
 // ----------------------
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers,
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers],
 });
 
 // ----------------------
-// HELPER: safeInteractionCall
+// SAFE INTERACTION HELPER
 // ----------------------
-async function safeInteractionCall(interaction: any, fn: 'reply' | 'update' | 'followUp', ...args: any[]) {
+async function safeInteractionCall(interaction: any, fn: 'reply' | 'editReply' | 'followUp', ...args: any[]) {
   try {
     return await (interaction[fn] as Function)(...args);
   } catch (err: any) {
@@ -81,7 +75,6 @@ async function safeInteractionCall(interaction: any, fn: 'reply' | 'update' | 'f
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user?.tag}`);
 
-  // Set presence
   try {
     await client.user?.setPresence({
       activities: [{ name: 'Managing tickets' }],
@@ -91,11 +84,8 @@ client.once('ready', async () => {
     console.warn('Failed to set presence:', err);
   }
 
-  // Register slash commands
-  const commands = [
-    { name: 'open-ticket', description: 'Open a new support ticket' },
-  ];
-
+  // Register commands
+  const commands = [{ name: 'open-ticket', description: 'Open a new support ticket' }];
   try {
     if (GUILD_ID && client.application?.owner) {
       const guild = client.guilds.cache.get(GUILD_ID);
@@ -104,7 +94,7 @@ client.once('ready', async () => {
         console.log(`✅ Registered commands to guild ${GUILD_ID}`);
       } else {
         await client.application?.commands.set(commands, GUILD_ID);
-        console.log(`✅ Registered commands to guild ${GUILD_ID} (via API)`);
+        console.log(`✅ Registered commands to guild ${GUILD_ID} via API`);
       }
     } else {
       await client.application?.commands.set(commands);
@@ -118,12 +108,10 @@ client.once('ready', async () => {
 // ----------------------
 // INTERACTION HANDLER
 // ----------------------
-client.on('interactionCreate', async (interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction) => {
+client.on('interactionCreate', async (interaction) => {
   try {
-    // ----------------------
-    // SLASH COMMAND: /open-ticket
-    // ----------------------
-    if ('isChatInputCommand' in interaction && interaction.isChatInputCommand()) {
+    // Slash Command
+    if (interaction instanceof ChatInputCommandInteraction) {
       if (interaction.commandName === 'open-ticket') {
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
@@ -141,25 +129,24 @@ client.on('interactionCreate', async (interaction: ChatInputCommandInteraction |
           { id: client.user!.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels] },
         ];
 
-        const channelOptions: any = { type: 0, permissionOverwrites: overwrites };
-        if (TICKET_CATEGORY_ID) channelOptions.parent = TICKET_CATEGORY_ID;
-
-        const channel = await guild.channels.create({ name, ...channelOptions });
+        const channel = await guild.channels.create({
+          name,
+          type: 0,
+          permissionOverwrites: overwrites,
+          parent: TICKET_CATEGORY_ID || undefined
+        });
 
         const closeButton = new ButtonBuilder().setCustomId('ticket_close').setLabel('Close Ticket').setStyle(ButtonStyle.Danger);
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton);
 
         await channel.send({ content: `Hello <@${interaction.user.id}>, a staff member will be with you shortly. Use the button below to close this ticket when you are done.`, components: [row] });
-
-        await safeInteractionCall(interaction, 'editReply', { content: `Ticket created: <#${channel.id}>`, ephemeral: true }).catch(() => {});
+        await safeInteractionCall(interaction, 'editReply', { content: `Ticket created: <#${channel.id}>`, ephemeral: true });
         return;
       }
     }
 
-    // ----------------------
-    // BUTTON INTERACTIONS
-    // ----------------------
-    if ('isButton' in interaction && interaction.isButton()) {
+    // Button
+    if (interaction instanceof ButtonInteraction) {
       if (interaction.customId === 'ticket_close') {
         const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('Close Ticket');
 
@@ -182,10 +169,8 @@ client.on('interactionCreate', async (interaction: ChatInputCommandInteraction |
       }
     }
 
-    // ----------------------
-    // MODAL SUBMIT
-    // ----------------------
-    if ('isModalSubmit' in interaction && interaction.isModalSubmit()) {
+    // Modal
+    if (interaction instanceof ModalSubmitInteraction) {
       if (interaction.customId === 'ticket_close_modal') {
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
@@ -197,11 +182,8 @@ client.on('interactionCreate', async (interaction: ChatInputCommandInteraction |
         }
 
         try {
-          if (CLOSED_CATEGORY_ID) {
-            await channel.setParent(CLOSED_CATEGORY_ID).catch(err => console.warn('Failed to move channel to closed category:', err));
-          }
-
-          await channel.setName(`closed-${channel.name}`).catch(err => console.warn('Failed to rename channel:', err));
+          if (CLOSED_CATEGORY_ID) await channel.setParent(CLOSED_CATEGORY_ID).catch(console.warn);
+          await channel.setName(`closed-${channel.name}`).catch(console.warn);
           await channel.send(`This ticket has been closed by <@${interaction.user.id}>. Reason: ${reason}`);
           await safeInteractionCall(interaction, 'editReply', { content: 'Ticket closed successfully.', ephemeral: true });
         } catch (err) {
@@ -213,9 +195,7 @@ client.on('interactionCreate', async (interaction: ChatInputCommandInteraction |
     }
   } catch (err) {
     console.error('Unhandled interaction error:', err);
-    try {
-      await safeInteractionCall(interaction, 'reply', { content: 'An unexpected error occurred.', ephemeral: true });
-    } catch {}
+    try { await safeInteractionCall(interaction, 'reply', { content: 'An unexpected error occurred.', ephemeral: true }); } catch {}
   }
 });
 
