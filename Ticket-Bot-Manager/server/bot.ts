@@ -1,122 +1,204 @@
-/*
- * Ticket Bot Manager - Bot Entrypoint
- * Updated: Add safer debug environment logging and additional Discord client listeners
- * - Does NOT log the token value (only whether it is present)
- */
+import { Client, GatewayIntentBits, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, TextChannel } from 'discord.js';
+import dotenv from 'dotenv';
 
-import { Client, GatewayIntentBits } from 'discord.js';
+dotenv.config();
 
-// Simple logger wrapper to centralize debug control
-const isDebug = Boolean(process.env.DEBUG && process.env.DEBUG !== '0');
-const log = {
-  debug: (...args: unknown[]) => {
-    if (isDebug) console.debug('[debug]', ...args);
-  },
-  info: (...args: unknown[]) => console.info('[info]', ...args),
-  warn: (...args: unknown[]) => console.warn('[warn]', ...args),
-  error: (...args: unknown[]) => console.error('[error]', ...args),
-};
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID; // optional: if set, commands will be registered to this guild only
+const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; // optional: category to create tickets under
+const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID; // optional: category to move closed tickets to
 
-function safeEnvSummary() {
-  // Only include non-sensitive environment info. DO NOT include token contents.
-  return {
-    NODE_ENV: process.env.NODE_ENV ?? '(unset)',
-    DEBUG: process.env.DEBUG ?? '(unset)',
-    DISCORD_TOKEN_PRESENT: !!process.env.DISCORD_TOKEN,
-    DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID ?? '(unset)',
-    GUILD_ID: process.env.GUILD_ID ?? '(unset)',
-  };
+if (!TOKEN) {
+  console.error('TOKEN is not set in environment');
+  process.exit(1);
 }
 
-async function startBot() {
-  log.info('Starting Ticket Bot Manager...');
-  log.debug('Environment summary:', safeEnvSummary());
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers],
+});
 
-  const token = process.env.DISCORD_TOKEN;
-  if (!token) {
-    log.error('DISCORD_TOKEN is not set. Aborting start.');
-    throw new Error('Missing DISCORD_TOKEN');
+// Helper to safely reply/update interactions and ignore Unknown Interaction errors
+async function safeInteractionCall(interaction: any, fn: 'reply' | 'update' | 'followUp', ...args: any[]) {
+  try {
+    // @ts-ignore
+    return await (interaction[fn] as Function)(...args);
+  } catch (err: any) {
+    // Discord "Unknown interaction" errors can happen if an interaction token expires or was already responded to.
+    // Error code 10062 is Unknown Interaction — ignore silently in that case.
+    if (err && (err.code === 10062 || String(err.message).includes('Unknown interaction'))) {
+      return;
+    }
+    console.error('Interaction error:', err);
   }
+}
 
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+client.once('ready', async () => {
+  console.log(`Logged in as ${client.user?.tag}`);
 
-  // Core ready listener
-  client.once('ready', () => {
-    log.info(`Discord client ready. User: ${client.user?.tag ?? '(unknown)'}`);
-  });
-
-  // Surface common runtime and login issues
-  client.on('error', (err) => {
-    log.error('Discord client encountered an error:', err);
-  });
-
-  client.on('warn', (info) => {
-    log.warn('Discord client warning:', info);
-  });
-
-  // Shard-related listeners (helpful when running sharded or on larger bots)
-  // Some events may not fire for single-shard bots but adding them helps surface problems when they do.
-  // Type definitions for some events may not exist depending on discord.js version, so cast to any where necessary.
-  (client as any).on?.('shardError', (error: Error, shardId: number) => {
-    log.error(`Shard ${shardId} error:`, error);
-  });
-
-  (client as any).on?.('shardDisconnect', (event: any, shardId: number) => {
-    log.warn(`Shard ${shardId} disconnected. Event:`, event);
-  });
-
-  (client as any).on?.('shardReconnecting', (shardId: number) => {
-    log.warn(`Shard ${shardId} reconnecting...`);
-  });
-
-  (client as any).on?.('shardReady', (shardId: number) => {
-    log.info(`Shard ${shardId} ready.`);
-  });
-
-  // Debug event can be very verbose; only attach when DEBUG is enabled.
-  if (isDebug) {
-    // Some versions of discord.js emit a 'debug' event on the Client. Use any to avoid TS errors.
-    (client as any).on?.('debug', (message: string) => {
-      // Make sure not to accidentally log the token by filtering common messages that may include it.
-      // This is a conservative approach: ignore any debug message that contains the literal 'token' keyword.
-      if (typeof message === 'string' && /token/i.test(message)) {
-        log.debug('[debug] (filtered potentially sensitive debug message)');
-      } else {
-        log.debug('[discord debug]', message);
-      }
+  // Set a presence so the bot looks alive
+  try {
+    await client.user?.setPresence({
+      activities: [{ name: 'Managing tickets' }],
+      status: 'online',
     });
+  } catch (err) {
+    console.warn('Failed to set presence:', err);
   }
 
-  // Catch-all for unhandled rejections and uncaught exceptions to give visibility in logs.
-  process.on('unhandledRejection', (reason) => {
-    log.error('Unhandled Promise Rejection:', reason);
-  });
-
-  process.on('uncaughtException', (err) => {
-    log.error('Uncaught Exception:', err);
-    // Depending on the deployment, you may want to exit here to let a process manager restart the service.
-  });
+  // Register commands. If GUILD_ID is set, register to that guild for faster updates in dev.
+  const commands = [
+    {
+      name: 'open-ticket',
+      description: 'Open a new support ticket',
+    },
+  ];
 
   try {
-    log.info('Logging in to Discord (token presence only: %s)', !!token);
-    await client.login(token);
-    log.info('Login attempt finished.');
-  } catch (loginErr) {
-    // Ensure we don't print the token or any sensitive data on login failure.
-    log.error('Failed to login to Discord. Error:', loginErr);
-    throw loginErr;
+    if (GUILD_ID && client.application?.owner) {
+      // Register to a specific guild
+      const guild = client.guilds.cache.get(GUILD_ID);
+      if (guild) {
+        await guild.commands.set(commands);
+        console.log(`Registered commands to guild ${GUILD_ID}`);
+      } else {
+        // If guild is not cached yet, fallback to application command registration for guild via REST
+        await client.application?.commands.set(commands, GUILD_ID);
+        console.log(`Registered commands to guild ${GUILD_ID} (via application API)`);
+      }
+    } else {
+      await client.application?.commands.set(commands);
+      console.log('Registered global commands');
+    }
+  } catch (err) {
+    console.error('Failed to register commands:', err);
   }
+});
 
-  return client;
-}
+client.on('interactionCreate', async (interaction: any) => {
+  try {
+    // Slash command: /open-ticket
+    if (interaction.isChatInputCommand && interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'open-ticket') {
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-// If this module is executed directly, start the bot. Allow requiring the module in tests without side-effects.
-if (require.main === module) {
-  startBot().catch((err) => {
-    log.error('Bot failed to start:', err);
-    // Exit with non-zero to indicate failure to any supervising process
-    process.exit(1);
-  });
-}
+        const guild = interaction.guild;
+        if (!guild) {
+          await safeInteractionCall(interaction, 'reply', { content: 'This command can only be used in a server.', ephemeral: true });
+          return;
+        }
 
-export default startBot;
+        // Build a safe channel name
+        const name = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, '')}`.slice(0, 90);
+
+        // Permission overwrites: hide from everyone, allow the user and the bot
+        const overwrites = [
+          {
+            id: guild.roles.everyone.id,
+            deny: [PermissionsBitField.Flags.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory],
+          },
+          {
+            id: client.user!.id,
+            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels],
+          },
+        ];
+
+        const channelOptions: any = { type: 0, permissionOverwrites: overwrites };
+        if (TICKET_CATEGORY_ID) channelOptions.parent = TICKET_CATEGORY_ID;
+
+        const channel = await guild.channels.create({ name, ...channelOptions });
+
+        const closeButton = new ButtonBuilder().setCustomId('ticket_close').setLabel('Close Ticket').setStyle(ButtonStyle.Danger);
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton);
+
+        await channel.send({ content: `Hello <@${interaction.user.id}>, a staff member will be with you shortly. Use the button below to close this ticket when you are done.`, components: [row] });
+
+        await safeInteractionCall(interaction, 'editReply', { content: `Ticket created: <#${channel.id}>`, ephemeral: true }).catch(() => {});
+
+        return;
+      }
+    }
+
+    // Button interactions
+    if (interaction.isButton && interaction.isButton()) {
+      const customId = interaction.customId;
+
+      if (customId === 'ticket_close') {
+        // Show a modal to collect close reason
+        const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('Close Ticket');
+
+        const reasonInput = new TextInputBuilder().setCustomId('reason').setLabel('Reason for closing (optional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder('Describe why the ticket is being closed');
+
+        const firstRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
+        modal.addComponents(firstRow as any);
+
+        // showModal will acknowledge the interaction; after showing a modal we must return and not attempt to reply/update further
+        await interaction.showModal(modal).catch(async (err: any) => {
+          // If showing a modal failed, try to fallback to a confirmation reply
+          if (err && (err.code === 10062 || String(err.message).includes('Unknown interaction'))) return;
+          console.error('showModal failed:', err);
+          await safeInteractionCall(interaction, 'reply', { content: 'Failed to open modal to close ticket.', ephemeral: true });
+        });
+
+        return; // Important: return after showModal
+      }
+
+      // Add other button handlers here if needed
+    }
+
+    // Modal submit
+    if (interaction.isModalSubmit && interaction.isModalSubmit()) {
+      if (interaction.customId === 'ticket_close_modal') {
+        // Defer the reply because we will perform potentially long operations (e.g., moving channel, sending messages)
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+        const reason = interaction.fields.getTextInputValue('reason') || 'No reason provided';
+        const channel = interaction.channel as TextChannel | undefined;
+        if (!channel || !channel.guild) {
+          await safeInteractionCall(interaction, 'editReply', { content: 'Could not determine ticket channel.', ephemeral: true });
+          return;
+        }
+
+        // Update channel: rename and remove send permissions for the original opener
+        try {
+          // Make channel read-only for non-staff by removing SEND_MESSAGES for everyone except staff and bot
+          // Implementation depends on your staff role setup. Here we simply lock the channel for the original opener.
+          const openerId = (await channel.permissionOverwrites.fetch()).filter(o => o.type === 'member').firstKey?.();
+
+          // Optionally move to closed category
+          if (CLOSED_CATEGORY_ID) {
+            await channel.setParent(CLOSED_CATEGORY_ID).catch(err => console.warn('Failed to move channel to closed category:', err));
+          }
+
+          // Rename to indicate closed
+          await channel.setName(`closed-${channel.name}`).catch(err => console.warn('Failed to rename channel:', err));
+
+          // Send a closing message
+          await channel.send(`This ticket has been closed by <@${interaction.user.id}>. Reason: ${reason}`);
+
+          // Acknowledge the modal submit to the user
+          await safeInteractionCall(interaction, 'editReply', { content: 'Ticket closed successfully.', ephemeral: true });
+        } catch (err) {
+          console.error('Error closing ticket:', err);
+          await safeInteractionCall(interaction, 'editReply', { content: 'An error occurred while closing the ticket.', ephemeral: true });
+        }
+
+        return;
+      }
+    }
+  } catch (err) {
+    console.error('Unhandled interaction handler error:', err);
+    try {
+      await safeInteractionCall(interaction, 'reply', { content: 'An unexpected error occurred.', ephemeral: true });
+    } catch {}
+  }
+});
+
+client.login(TOKEN).catch(err => {
+  console.error('Failed to login:', err);
+  process.exit(1);
+});
