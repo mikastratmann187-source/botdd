@@ -35,8 +35,9 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
   ],
-  partials: [Partials.Channel],
+  partials: [Partials.Channel, Partials.GuildMember],
 });
 
 client.on("ready", async () => {
@@ -449,7 +450,7 @@ client.on("messageCreate", async (message) => {
   if (message.content === "!setup_rules") {
     const embed = new EmbedBuilder()
       .setTitle("📜 ─── ✦ REGELWERK ✦ ───")
-      .setDescription(`Willkommen in MIKA'S COMMUNITY!\n\n🔒 **Allgemeine Regeln**\n1️⃣ Respektvoller Umgang – Kein Mobbing, Rassismus oder toxisches Verhalten.\n2️⃣ Kein Spam oder Werbung – Serverlinks & Werbung nur mit Erlaubnis.\n3️⃣ Kein NSFW – Auch nicht im Profilbild oder Namen.\n4️⃣ Richtige Channels nutzen – Kein Off-Topic in Fachchannels.\n5️⃣ Mod-Anweisungen folgen – Keine Diskussionen im Öffentlichen.\n\n🎭 **RP-Regeln (OOC-Discord)**\n⚠️ Dieser Discord ist rein OOC – alles hier bleibt außerhalb des Roleplays!\n\n🎮 Kein Meta-Gaming – Infos aus Discord dürfen NICHT im RP verwendet werden.\n🤖 Kein Power-RP / Fail-RP – Bleibt realistisch & fair im Spiel.\n💢 Konflikte nicht hier austragen – Klärt RP-Streit per DM oder im passenden Channel.\n📵 OOC bleibt OOC – Kein RP im Discord selbst.\n📸 Medien richtig posten – Clips oder Screens nur mit Respekt & Kontext.\n\n📌 **Sonstiges**\n🔧 Twitch-Mods gesucht! Du willst mithelfen? Melde dich per Ticket.\n🚨 Regelverstöße melden – Per DM an ein Teammitglied.\n\n💜 Viel Spaß & bleib respektvoll!`)
+      .setDescription(`Willkommen in MIKA'S COMMUNITY!\n\n🔒 **Allgemeine Regeln**\n1️⃣ Respektvoller Umgang – Kein Mobbing, Rassismus oder toxisches Verhalten.\n2️⃣ Kein Spam oder We[...]`)
       .setColor(0x5865F2);
 
     const button = new ButtonBuilder()
@@ -764,9 +765,18 @@ async function createTicketChannel(
   await interaction.reply({ content: `Dein Ticket wurde erstellt: ${channel.toString()}`, ephemeral: true });
 }
 
-export function startBot() {
-  if (process.env.DISCORD_TOKEN) {
-    client.login(process.env.DISCORD_TOKEN).catch(console.error);
+export async function startBot() {
+  if (!process.env.DISCORD_TOKEN) {
+    console.error("startBot(): DISCORD_TOKEN missing — skipping client.login(). Set DISCORD_TOKEN in your environment.");
+    return;
+  }
+
+  console.log("startBot(): calling client.login() (token present). Will log errors to console if login fails.");
+  try {
+    await client.login(process.env.DISCORD_TOKEN);
+    console.log(`startBot(): client.login() resolved — Logged in as ${client.user?.tag}`);
+  } catch (err) {
+    console.error("startBot(): client.login() failed:", err);
   }
 }
 
