@@ -1,301 +1,160 @@
+import { Client, GatewayIntentBits, PermissionsBitField, TextChannel, MessageActionRow, MessageButton, MessageEmbed, MessageSelectMenu, InteractionCollector, Collection } from 'discord.js';
 import dotenv from 'dotenv';
+
 dotenv.config();
 
-import {
-  Client,
-  GatewayIntentBits,
-  PermissionsBitField,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  ChatInputCommandInteraction,
-  ButtonInteraction,
-  ModalSubmitInteraction,
-  TextChannel,
-  EmbedBuilder,
-  SelectMenuBuilder,
-  SelectMenuOptionBuilder
-} from 'discord.js';
-
 const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
+const SUPPORT_ROLE_ID = process.env.SUPPORT_ROLE_ID; // Optional
 const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
 const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
 
 if (!TOKEN) {
-  console.error('❌ DISCORD_TOKEN is not set!');
+  console.error('❌ DISCORD_TOKEN fehlt!');
   process.exit(1);
 }
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.MessageContent],
 });
 
-// Safe interaction call helper
-async function safeInteractionCall(interaction: any, fn: 'reply' | 'update' | 'followUp', ...args: any[]) {
-  try {
-    return await (interaction[fn] as Function)(...args);
-  } catch (err: any) {
-    if (err && (err.code === 10062 || String(err.message).includes('Unknown interaction'))) return;
-    console.error('Interaction error:', err);
-  }
+interface TicketData {
+  userId: string;
+  type: string;
+  priority: number;
+  channelId: string;
 }
 
-// Keep track of panel states
-const panelStatus: Record<string, boolean> = {
+const tickets = new Collection<string, TicketData>();
+const panelsStatus = {
   mod: true,
-  supporter: true
+  supporter: true,
 };
 
-// Tickets data
-interface TicketData {
-  type: 'mod' | 'supporter' | 'question' | 'suggestion';
-  priority: number;
-  creatorId: string;
-}
-const ticketMap = new Map<string, TicketData>();
+client.once('ready', () => {
+  console.log(`✅ Bot logged in as ${client.user?.tag}`);
+});
 
-// Exported start function
-export async function startBot() {
-  client.once('ready', async () => {
-    console.log(`✅ Logged in as ${client.user?.tag}`);
-    await client.user?.setPresence({
-      activities: [{ name: 'Managing tickets' }],
-      status: 'online'
+client.on('messageCreate', async message => {
+  if (!message.guild || message.author.bot) return;
+
+  const prefix = '!';
+  if (!message.content.startsWith(prefix)) return;
+
+  const [command, ...args] = message.content.slice(prefix.length).trim().split(/\s+/);
+
+  // ------------------------
+  // Ticket Setup Panel
+  // ------------------------
+  if (command === 'ticket' && args[0] === 'setup') {
+    const embed = new MessageEmbed()
+      .setTitle('🎫 Ticket Panel')
+      .setDescription('Wähle deinen Ticket-Typ aus:\n\n• Mod-Bewerbung\n• Supporter-Bewerbung\n• Frage\n• Vorschlag')
+      .setColor('BLUE');
+
+    const row = new MessageActionRow()
+      .addComponents(
+        new MessageButton()
+          .setCustomId('ticket_mod')
+          .setLabel('Mod Bewerbung')
+          .setStyle('PRIMARY')
+          .setDisabled(!panelsStatus.mod),
+        new MessageButton()
+          .setCustomId('ticket_supporter')
+          .setLabel('Supporter Bewerbung')
+          .setStyle('PRIMARY')
+          .setDisabled(!panelsStatus.supporter),
+        new MessageButton()
+          .setCustomId('ticket_frage')
+          .setLabel('Frage')
+          .setStyle('SECONDARY'),
+        new MessageButton()
+          .setCustomId('ticket_vorschlag')
+          .setLabel('Vorschlag')
+          .setStyle('SUCCESS')
+      );
+
+    await message.channel.send({ embeds: [embed], components: [row] });
+  }
+
+  // ------------------------
+  // Close Panels
+  // ------------------------
+  if (command === 'close') {
+    const type = args[0];
+    if (type === 'mod') panelsStatus.mod = false;
+    if (type === 'supporter') panelsStatus.supporter = false;
+
+    const channel = message.channel as TextChannel;
+    channel.send(`✅ ${type} Bewerbungen wurden geschlossen. Panel Buttons werden deaktiviert.`);
+  }
+
+  // ------------------------
+  // Open Ticket Command
+  // ------------------------
+  if (command === 'open') {
+    const type = args[0]; // mod/supporter/frage/vorschlag
+    if ((type === 'mod' && !panelsStatus.mod) || (type === 'supporter' && !panelsStatus.supporter)) {
+      return message.author.send(`${type} Bewerbungen sind aktuell geschlossen.`);
+    }
+
+    const ticketName = `${type}-${message.author.username}`.toLowerCase().slice(0, 90);
+    const guild = message.guild;
+    const channel = await guild.channels.create(ticketName, {
+      type: 0,
+      parent: TICKET_CATEGORY_ID,
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: message.author.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+        { id: client.user!.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels] },
+      ],
     });
 
-    // Register slash commands
-    if (!GUILD_ID) return;
-    const guild = client.guilds.cache.get(GUILD_ID);
-    const commands = [
-      {
-        name: 'ticket',
-        description: 'Ticket system commands',
-        options: [
-          {
-            type: 1, // subcommand
-            name: 'setup',
-            description: 'Send the ticket panel'
-          },
-          {
-            type: 1,
-            name: 'close',
-            description: 'Close applications panel',
-            options: [
-              { type: 3, name: 'type', description: 'mod or supporter', required: true }
-            ]
-          },
-          {
-            type: 1,
-            name: 'open',
-            description: 'Open applications panel',
-            options: [
-              { type: 3, name: 'type', description: 'mod or supporter', required: true }
-            ]
-          }
-        ]
-      },
-      {
-        name: 'news',
-        description: 'Send news update',
-        options: [
-          { type: 7, name: 'channel', description: 'Channel to send news', required: true }
-        ]
-      }
-    ];
+    tickets.set(channel.id, { userId: message.author.id, type, priority: 1, channelId: channel.id });
 
-    await guild?.commands.set(commands);
-    console.log(`✅ Commands registered for guild ${GUILD_ID}`);
-  });
+    const ticketEmbed = new MessageEmbed()
+      .setTitle(`🎫 Neues Ticket: ${type}`)
+      .setDescription(`Dein Ticket wurde erstellt. Bitte beantworte die Fragen im Channel.\n\n**User:** <@${message.author.id}>\n**Typ:** ${type}`)
+      .setColor('GREEN');
 
-  // Interaction handler
-  client.on('interactionCreate', async (interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction) => {
-    try {
-      if (interaction.isChatInputCommand()) {
-        const { commandName, options } = interaction;
+    const ticketRow = new MessageActionRow()
+      .addComponents(
+        new MessageButton().setCustomId('close').setLabel('Close Ticket').setStyle('DANGER'),
+        new MessageButton().setCustomId('claim').setLabel('Claim Ticket').setStyle('PRIMARY'),
+        new MessageButton().setCustomId('priority').setLabel('Set Priority').setStyle('SECONDARY')
+      );
 
-        if (commandName === 'ticket') {
-          const sub = options.getSubcommand(true);
+    await channel.send({ content: `<@${message.author.id}>`, embeds: [ticketEmbed], components: [ticketRow] });
 
-          if (sub === 'setup') {
-            // Send main ticket panel
-            const modBtn = new ButtonBuilder()
-              .setCustomId('ticket_mod')
-              .setLabel('Bewerbung Mod')
-              .setStyle(ButtonStyle.Primary)
-              .setDisabled(!panelStatus.mod);
+    message.reply(`✅ Dein Ticket wurde erstellt: <#${channel.id}>`);
+  }
+});
 
-            const supBtn = new ButtonBuilder()
-              .setCustomId('ticket_supporter')
-              .setLabel('Bewerbung Supporter')
-              .setStyle(ButtonStyle.Success)
-              .setDisabled(!panelStatus.supporter);
+// ------------------------
+// Button Handling
+// ------------------------
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton()) return;
+  const ticket = tickets.get(interaction.channelId);
+  if (!ticket) return;
 
-            const questionBtn = new ButtonBuilder()
-              .setCustomId('ticket_question')
-              .setLabel('Frage stellen')
-              .setStyle(ButtonStyle.Secondary);
+  if (interaction.customId === 'close') {
+    const channel = interaction.channel as TextChannel;
+    if (CLOSED_CATEGORY_ID) await channel.setParent(CLOSED_CATEGORY_ID);
+    await channel.setName(`closed-${channel.name}`);
+    await channel.send(`Das Ticket wurde von <@${interaction.user.id}> geschlossen.`);
+    tickets.delete(channel.id);
+    await interaction.reply({ content: 'Ticket geschlossen!', ephemeral: true });
+  }
 
-            const suggestionBtn = new ButtonBuilder()
-              .setCustomId('ticket_suggestion')
-              .setLabel('Vorschlag einreichen')
-              .setStyle(ButtonStyle.Secondary);
+  if (interaction.customId === 'claim') {
+    await interaction.reply({ content: `Ticket von <@${ticket.userId}> wurde von <@${interaction.user.id}> übernommen.`, ephemeral: false });
+  }
 
-            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(modBtn, supBtn, questionBtn, suggestionBtn);
+  if (interaction.customId === 'priority') {
+    ticket.priority = ticket.priority === 3 ? 1 : ticket.priority + 1; // Cycle 1-3
+    await interaction.reply({ content: `Ticket-Priorität ist jetzt ${ticket.priority}`, ephemeral: true });
+  }
+});
 
-            await interaction.reply({
-              embeds: [
-                new EmbedBuilder()
-                  .setTitle('🎫 Ticket-System')
-                  .setDescription('Wähle unten aus, welche Art von Ticket du öffnen möchtest.')
-                  .setColor(0x00ff99)
-              ],
-              components: [row],
-              ephemeral: false
-            });
-          }
+client.login(TOKEN);
 
-          if (sub === 'close') {
-            const type = options.getString('type', true);
-            panelStatus[type] = false;
-            await interaction.reply({ content: `${type} Bewerbungen sind jetzt geschlossen.`, ephemeral: true });
-          }
-
-          if (sub === 'open') {
-            const type = options.getString('type', true);
-            panelStatus[type] = true;
-            await interaction.reply({ content: `${type} Bewerbungen sind jetzt geöffnet.`, ephemeral: true });
-          }
-        }
-
-        if (commandName === 'news') {
-          const ch = options.getChannel('channel', true) as TextChannel;
-          await ch.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle('📰 News Update')
-                .setDescription('Hier siehst du die neuesten Updates und Features.')
-                .setColor(0xff9900)
-            ]
-          });
-          await interaction.reply({ content: 'News gesendet!', ephemeral: true });
-        }
-      }
-
-      // Button interactions
-      if (interaction.isButton()) {
-        const guild = interaction.guild;
-        if (!guild) return;
-
-        let type: 'mod' | 'supporter' | 'question' | 'suggestion' = 'question';
-        if (interaction.customId === 'ticket_mod') type = 'mod';
-        else if (interaction.customId === 'ticket_supporter') type = 'supporter';
-        else if (interaction.customId === 'ticket_question') type = 'question';
-        else if (interaction.customId === 'ticket_suggestion') type = 'suggestion';
-
-        // Check if panel is closed
-        if ((type === 'mod' && !panelStatus.mod) || (type === 'supporter' && !panelStatus.supporter)) {
-          await interaction.user.send(`${type} Bewerbungen sind aktuell geschlossen.`);
-          await safeInteractionCall(interaction, 'reply', { content: 'Dieses Ticket kann derzeit nicht erstellt werden.', ephemeral: true });
-          return;
-        }
-
-        const ticketName = `${type}-${interaction.user.username.toLowerCase()}`.slice(0, 90);
-        const overwrites = [
-          { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-          { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-          { id: client.user!.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels] }
-        ];
-
-        const ch = await guild.channels.create({
-          name: ticketName,
-          type: 0,
-          permissionOverwrites: overwrites,
-          parent: TICKET_CATEGORY_ID || undefined
-        });
-
-        // Initial message depending on type
-        let embed = new EmbedBuilder().setColor(0x00ff99);
-        if (type === 'mod' || type === 'supporter') {
-          embed.setTitle(`🎓 Bewerbung für ${type === 'mod' ? 'Mod' : 'Supporter'}`)
-            .setDescription('Bitte beantworte die Fragen im Formular.');
-
-          const modal = new ModalBuilder()
-            .setCustomId(`modal_${type}_${interaction.user.id}`)
-            .setTitle(`${type === 'mod' ? 'Mod' : 'Supporter'} Bewerbung`);
-
-          const q1 = new TextInputBuilder()
-            .setCustomId('q1')
-            .setLabel('Warum möchtest du diese Rolle?')
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(true);
-
-          const q2 = new TextInputBuilder()
-            .setCustomId('q2')
-            .setLabel('Warum sollten wir genau dich wählen?')
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(true);
-
-          const row1 = new ActionRowBuilder<TextInputBuilder>().addComponents(q1);
-          const row2 = new ActionRowBuilder<TextInputBuilder>().addComponents(q2);
-
-          modal.addComponents(row1 as any, row2 as any);
-
-          await safeInteractionCall(interaction, 'showModal', modal);
-        } else if (type === 'question') {
-          embed.setTitle('❓ Neue Frage')
-            .setDescription('Stelle hier deine Frage an das Team.');
-          await ch.send({ content: `<@${interaction.user.id}>`, embeds: [embed] });
-          await safeInteractionCall(interaction, 'reply', { content: `Ticket erstellt: <#${ch.id}>`, ephemeral: true });
-        } else if (type === 'suggestion') {
-          embed.setTitle('💡 Vorschlag')
-            .setDescription('Hier kannst du Vorschläge für Twitch/Discord einreichen.');
-          await ch.send({ content: `<@${interaction.user.id}>`, embeds: [embed] });
-          await safeInteractionCall(interaction, 'reply', { content: `Ticket erstellt: <#${ch.id}>`, ephemeral: true });
-        }
-
-        // Store ticket info
-        ticketMap.set(ch.id, { type, priority: 1, creatorId: interaction.user.id });
-      }
-
-      // Modal submits
-      if (interaction.isModalSubmit()) {
-        const [prefix, type, userId] = interaction.customId.split('_');
-        const channel = interaction.channel as TextChannel | undefined;
-        if (!channel) return;
-
-        const answers = {
-          q1: interaction.fields.getTextInputValue('q1'),
-          q2: interaction.fields.getTextInputValue('q2')
-        };
-
-        await channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(`Bewerbung von <@${interaction.user.id}>`)
-              .setDescription(`**Frage 1:** ${answers.q1}\n**Frage 2:** ${answers.q2}`)
-              .setColor(0x00ff99)
-          ]
-        });
-
-        await safeInteractionCall(interaction, 'reply', { content: 'Deine Bewerbung wurde eingereicht!', ephemeral: true });
-      }
-    } catch (err) {
-      console.error('Interaction error:', err);
-      try {
-        await safeInteractionCall(interaction, 'reply', { content: 'Ein Fehler ist aufgetreten.', ephemeral: true });
-      } catch {}
-    }
-  });
-
-  await client.login(TOKEN);
-  console.log('✅ Discord bot logged in');
-}
