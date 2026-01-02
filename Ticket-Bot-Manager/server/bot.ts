@@ -1,3 +1,14 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
+const token = process.env.TOKEN;
+if (!token) {
+  console.error("TOKEN is not set in environment");
+  process.exit(1);
+}
+
+// Dann login
+client.login(token);
 import { Client, GatewayIntentBits, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, TextChannel } from 'discord.js';
 import dotenv from 'dotenv';
 
