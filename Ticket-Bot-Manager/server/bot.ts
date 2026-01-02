@@ -12,32 +12,32 @@ import {
 } from 'discord.js';
 import dotenv from 'dotenv';
 
-dotenv.config(); // Lädt lokale .env Datei, falls vorhanden
+dotenv.config(); // Lädt lokale .env falls vorhanden, Render liest automatisch die Env
 
-// Nutze die Render-Environment Variable
+// ENV Variablen
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID; // optional
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; // optional
-const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID; // optional
+const GUILD_ID = process.env.GUILD_ID; 
+const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
+const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
 
 if (!TOKEN) {
-  console.error('TOKEN is not set in environment');
+  console.error('DISCORD_TOKEN ist nicht gesetzt');
   process.exit(1);
 }
 
-// Client erstellen
+// Discord Client
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers],
 });
 
-// Helper für sichere Interaktionsaufrufe
+// Helper für sichere Interaktionen
 async function safeInteractionCall(interaction: any, fn: 'reply' | 'update' | 'followUp', ...args: any[]) {
   try {
     return await (interaction[fn] as Function)(...args);
   } catch (err: any) {
     if (err && (err.code === 10062 || String(err.message).includes('Unknown interaction'))) return;
-    console.error('Interaction error:', err);
+    console.error('Interaction Error:', err);
   }
 }
 
@@ -54,7 +54,7 @@ client.once('ready', async () => {
     console.warn('Failed to set presence:', err);
   }
 
-  // Slash Commands registrieren
+  // Commands registrieren
   const commands = [{ name: 'open-ticket', description: 'Open a new support ticket' }];
 
   try {
@@ -62,14 +62,14 @@ client.once('ready', async () => {
       const guild = client.guilds.cache.get(GUILD_ID);
       if (guild) {
         await guild.commands.set(commands);
-        console.log(`Registered commands to guild ${GUILD_ID}`);
+        console.log(`Commands registered to guild ${GUILD_ID}`);
       } else {
         await client.application?.commands.set(commands, GUILD_ID);
-        console.log(`Registered commands to guild ${GUILD_ID} (via API)`);
+        console.log(`Commands registered to guild ${GUILD_ID} via API`);
       }
     } else {
       await client.application?.commands.set(commands);
-      console.log('Registered global commands');
+      console.log('Global commands registered');
     }
   } catch (err) {
     console.error('Failed to register commands:', err);
@@ -79,8 +79,8 @@ client.once('ready', async () => {
 // Interaction Handler
 client.on('interactionCreate', async (interaction: any) => {
   try {
-    // Slash command: /open-ticket
-    if (interaction.isChatInputCommand?.() && interaction.commandName === 'open-ticket') {
+    // Slash Command
+    if (typeof interaction.isChatInputCommand === 'function' && interaction.isChatInputCommand() && interaction.commandName === 'open-ticket') {
       await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
       const guild = interaction.guild;
@@ -105,14 +105,14 @@ client.on('interactionCreate', async (interaction: any) => {
       const closeButton = new ButtonBuilder().setCustomId('ticket_close').setLabel('Close Ticket').setStyle(ButtonStyle.Danger);
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton);
 
-      await channel.send({ content: `Hello <@${interaction.user.id}>, a staff member will be with you shortly. Use the button below to close this ticket when you are done.`, components: [row] });
+      await channel.send({ content: `Hello <@${interaction.user.id}>, a staff member will be with you shortly. Use the button below to close this ticket.`, components: [row] });
 
-      await safeInteractionCall(interaction, 'editReply', { content: `Ticket created: <#${channel.id}>`, ephemeral: true }).catch(() => {});
+      await safeInteractionCall(interaction, 'editReply', { content: `Ticket created: <#${channel.id}>`, ephemeral: true });
       return;
     }
 
-    // Button interactions
-    if (interaction.isButton?.()) {
+    // Button
+    if (typeof interaction.isButton === 'function' && interaction.isButton()) {
       if (interaction.customId === 'ticket_close') {
         const modal = new ModalBuilder().setCustomId('ticket_close_modal').setTitle('Close Ticket');
         const reasonInput = new TextInputBuilder().setCustomId('reason').setLabel('Reason for closing (optional)').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder('Describe why the ticket is being closed');
@@ -120,37 +120,38 @@ client.on('interactionCreate', async (interaction: any) => {
         await interaction.showModal(modal).catch(async (err: any) => {
           if (err && (err.code === 10062 || String(err.message).includes('Unknown interaction'))) return;
           console.error('showModal failed:', err);
-          await safeInteractionCall(interaction, 'reply', { content: 'Failed to open modal to close ticket.', ephemeral: true });
+          await safeInteractionCall(interaction, 'reply', { content: 'Failed to open modal.', ephemeral: true });
         });
         return;
       }
     }
 
-    // Modal submit
-    if (interaction.isModalSubmit?.() && interaction.customId === 'ticket_close_modal') {
+    // Modal Submit
+    if (typeof interaction.isModalSubmit === 'function' && interaction.isModalSubmit() && interaction.customId === 'ticket_close_modal') {
       await interaction.deferReply({ ephemeral: true }).catch(() => {});
       const reason = interaction.fields.getTextInputValue('reason') || 'No reason provided';
       const channel = interaction.channel as TextChannel | undefined;
+
       if (!channel || !channel.guild) {
         await safeInteractionCall(interaction, 'editReply', { content: 'Could not determine ticket channel.', ephemeral: true });
         return;
       }
 
       try {
-        if (CLOSED_CATEGORY_ID) await channel.setParent(CLOSED_CATEGORY_ID).catch(err => console.warn('Failed to move channel to closed category:', err));
+        if (CLOSED_CATEGORY_ID) await channel.setParent(CLOSED_CATEGORY_ID).catch(err => console.warn('Failed to move channel:', err));
         await channel.setName(`closed-${channel.name}`).catch(err => console.warn('Failed to rename channel:', err));
         await channel.send(`This ticket has been closed by <@${interaction.user.id}>. Reason: ${reason}`);
         await safeInteractionCall(interaction, 'editReply', { content: 'Ticket closed successfully.', ephemeral: true });
       } catch (err) {
         console.error('Error closing ticket:', err);
-        await safeInteractionCall(interaction, 'editReply', { content: 'An error occurred while closing the ticket.', ephemeral: true });
+        await safeInteractionCall(interaction, 'editReply', { content: 'Error while closing ticket.', ephemeral: true });
       }
       return;
     }
   } catch (err) {
-    console.error('Unhandled interaction handler error:', err);
+    console.error('Unhandled interaction error:', err);
     try {
-      await safeInteractionCall(interaction, 'reply', { content: 'An unexpected error occurred.', ephemeral: true });
+      await safeInteractionCall(interaction, 'reply', { content: 'Unexpected error occurred.', ephemeral: true });
     } catch {}
   }
 });
