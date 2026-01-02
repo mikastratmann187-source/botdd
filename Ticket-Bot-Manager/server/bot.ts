@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config(); // <- ganz oben
+
 import express from 'express';
 
 const app = express();
